@@ -15,7 +15,6 @@ rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 cp "target/release/chartify-pro" "$MACOS_DIR/chartify-pro"
-cp "TEMPLTE.pptx" "$RESOURCES_DIR/TEMPLTE.pptx"
 sips -s format icns assets/chartify.png \
     --out "$RESOURCES_DIR/chartify.icns" >/dev/null
 

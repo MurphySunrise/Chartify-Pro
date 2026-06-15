@@ -9,7 +9,7 @@ from CSV data and generating presentation-ready PowerPoint reports.
 - Preserves empty item/group combinations without crashing
 - Calculates descriptive statistics and Welch's t-test
 - Produces box plots and normalized quantile plots
-- Builds reports from the supplied PowerPoint template
+- Builds reports from a PowerPoint template selected on the user's computer
 - Saves the report beside the source CSV
 - Runs as a standalone macOS or Windows desktop application
 
@@ -60,4 +60,3 @@ cargo run --release -- \
 ```
 
 Use `cargo run --release -- --help` for all options.
-

@@ -93,7 +93,7 @@ impl ChartifyApp {
         });
         Self {
             input: None,
-            ppt_template: default_template(),
+            ppt_template: None,
             structure: Structure::Single,
             columns: Vec::new(),
             selected_data_cols: HashSet::new(),
@@ -742,20 +742,4 @@ fn open_with_default_app(path: &Path) -> Result<()> {
         .spawn()
         .with_context(|| format!("Unable to open {}", path.display()))?;
     Ok(())
-}
-
-fn default_template() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-
-    if let Ok(current_dir) = std::env::current_dir() {
-        candidates.push(current_dir.join("TEMPLTE.pptx"));
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(binary_dir) = executable.parent() {
-            candidates.push(binary_dir.join("TEMPLTE.pptx"));
-            candidates.push(binary_dir.join("../Resources/TEMPLTE.pptx"));
-        }
-    }
-
-    candidates.into_iter().find(|path| path.is_file())
 }

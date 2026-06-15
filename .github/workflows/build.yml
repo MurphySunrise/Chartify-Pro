@@ -50,7 +50,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/Chartify-Pro | Out-Null
           Copy-Item target/release/chartify-pro.exe dist/Chartify-Pro/Chartify-Pro.exe
-          Copy-Item TEMPLTE.pptx dist/Chartify-Pro/TEMPLTE.pptx
           Compress-Archive -Path dist/Chartify-Pro/* -DestinationPath dist/Chartify-Pro-Windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
