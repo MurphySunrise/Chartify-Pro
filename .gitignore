@@ -1,0 +1,6 @@
+/target/
+/dist/
+/outputs/
+.DS_Store
+**/.DS_Store
+

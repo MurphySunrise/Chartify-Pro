@@ -1,0 +1,7 @@
+group,metric_ok,metric_partial,metric_empty
+A,1,10,
+A,2,12,
+A,3,,
+B,3,20,
+B,4,22,
+B,5,,

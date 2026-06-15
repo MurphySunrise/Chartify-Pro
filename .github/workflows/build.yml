@@ -1,0 +1,58 @@
+name: Build desktop applications
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+
+  macos:
+    name: macOS arm64
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: chmod +x scripts/package-macos.sh
+      - run: ./scripts/package-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Chartify-Pro-macOS-arm64
+          path: dist/Chartify-Pro-macOS-arm64.zip
+
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: Apply application icon
+        run: npx --yes rcedit target/release/chartify-pro.exe --set-icon assets/chartify.ico
+      - name: Package application
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/Chartify-Pro | Out-Null
+          Copy-Item target/release/chartify-pro.exe dist/Chartify-Pro/Chartify-Pro.exe
+          Copy-Item TEMPLTE.pptx dist/Chartify-Pro/TEMPLTE.pptx
+          Compress-Archive -Path dist/Chartify-Pro/* -DestinationPath dist/Chartify-Pro-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Chartify-Pro-Windows-x64
+          path: dist/Chartify-Pro-Windows-x64.zip

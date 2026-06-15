@@ -1,0 +1,7 @@
+group,item,value
+A,metric_ok,1
+A,metric_ok,2
+A,metric_empty,
+B,metric_ok,3
+B,metric_ok,4
+B,metric_empty,
