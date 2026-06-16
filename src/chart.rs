@@ -13,6 +13,19 @@ use super::{LongRow, StatRow, median};
 
 const WIDTH: u32 = 1600;
 const HEIGHT: u32 = 1000;
+const CHART_TITLE_FONT_SIZE: u32 = 38;
+const AXIS_TITLE_FONT_SIZE: u32 = 26;
+const AXIS_LABEL_FONT_SIZE: u32 = 22;
+const QUANTILE_LABEL_FONT_SIZE: u32 = 19;
+const LEGEND_FONT_SIZE: u32 = 22;
+const TABLE_HEADER_FONT_SIZE: u32 = 34;
+const TABLE_BODY_FONT_SIZE: u32 = 30;
+const CHART_MARGIN: u32 = 18;
+const CHART_TITLE_HEIGHT: u32 = 86;
+const BOX_X_LABEL_AREA_SIZE: u32 = 88;
+const BOX_Y_LABEL_AREA_SIZE: u32 = 88;
+const QUANTILE_X_LABEL_AREA_SIZE: u32 = 105;
+const QUANTILE_Y_LABEL_AREA_SIZE: u32 = 88;
 const NORMAL_QUANTILES: [f64; 18] = [
     0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 0.995,
     0.999,
@@ -102,7 +115,7 @@ fn render_item_chart(
     let content = root.margin(20, 35, 24, 24);
     let (top, lower) = content.split_vertically(675);
     let (_, lower) = lower.split_vertically(65);
-    let (table_area, _) = lower.split_vertically(135);
+    let (table_area, _) = lower.split_vertically(175);
     let (box_area, right) = top.split_horizontally(720);
     let (quantile_area, legend_area) = right.split_horizontally(720);
 
@@ -113,6 +126,39 @@ fn render_item_chart(
 
     root.present()
         .with_context(|| format!("Unable to write {}", path.display()))?;
+    Ok(())
+}
+
+fn draw_chart_title<DB: DrawingBackend>(
+    area: &DrawingArea<DB, Shift>,
+    prefix: &str,
+    item: &str,
+    y_label_area_size: u32,
+) -> Result<()>
+where
+    DB::ErrorType: 'static,
+{
+    let (width, height) = area.dim_in_pixel();
+    let plot_left = CHART_MARGIN as i32 + y_label_area_size as i32;
+    let plot_right = width as i32 - CHART_MARGIN as i32;
+    let center_x = (plot_left + plot_right) / 2;
+    let mut lines = vec![prefix.to_owned()];
+    lines.extend(wrap_title(item, 26).lines().map(str::to_owned));
+    let line_height = CHART_TITLE_FONT_SIZE as i32 + 4;
+    let total_height = line_height * lines.len() as i32;
+    let first_y = (height as i32 - total_height) / 2 + line_height / 2;
+
+    for (index, line) in lines.into_iter().enumerate() {
+        area.draw(&Text::new(
+            line,
+            (center_x, first_y + index as i32 * line_height),
+            ("sans-serif", CHART_TITLE_FONT_SIZE)
+                .into_font()
+                .style(FontStyle::Bold)
+                .color(&BLACK)
+                .pos(Pos::new(HPos::Center, VPos::Center)),
+        ))?;
+    }
     Ok(())
 }
 
@@ -133,15 +179,13 @@ where
     let (y_min, y_max) = value_range(&all_values);
     let x_max = groups.len().max(1) as f64 + 0.5;
     let label_groups = groups.to_vec();
+    let (title_area, chart_area) = area.split_vertically(CHART_TITLE_HEIGHT);
+    draw_chart_title(&title_area, "Box Chart for", item, BOX_Y_LABEL_AREA_SIZE)?;
 
-    let mut chart = ChartBuilder::on(area)
-        .caption(
-            format!("Box Chart for\n{}", wrap_title(item, 22)),
-            ("sans-serif", 30).into_font().style(FontStyle::Bold),
-        )
-        .margin(18)
-        .x_label_area_size(72)
-        .y_label_area_size(72)
+    let mut chart = ChartBuilder::on(&chart_area)
+        .margin(CHART_MARGIN)
+        .x_label_area_size(BOX_X_LABEL_AREA_SIZE)
+        .y_label_area_size(BOX_Y_LABEL_AREA_SIZE)
         .build_cartesian_2d(0.5f64..x_max, y_min..y_max)?;
 
     let axis_style = if significant {
@@ -159,8 +203,12 @@ where
         .disable_x_mesh()
         .disable_y_mesh()
         .light_line_style(RGBColor(230, 230, 230))
-        .axis_desc_style(("sans-serif", 20).into_font().style(FontStyle::Bold))
-        .label_style(("sans-serif", 16));
+        .axis_desc_style(
+            ("sans-serif", AXIS_TITLE_FONT_SIZE)
+                .into_font()
+                .style(FontStyle::Bold),
+        )
+        .label_style(("sans-serif", AXIS_LABEL_FONT_SIZE));
     mesh.draw()?;
     chart.draw_series(std::iter::once(Rectangle::new(
         [(0.5, y_min), (x_max, y_max)],
@@ -181,7 +229,6 @@ where
 
     let colors = palette();
     let mut median_points = Vec::new();
-    let max_duplicate_count = maximum_duplicate_count(values_by_group);
 
     for (index, values) in values_by_group.iter().enumerate() {
         if values.is_empty() {
@@ -219,9 +266,8 @@ where
             PathElement::new(vec![(x - 0.2, q2), (x + 0.2, q2)], color.stroke_width(4)),
         ])?;
 
-        let jittered = deterministic_jitter(values, x, max_duplicate_count);
         chart.draw_series(
-            jittered
+            centered_points(values, x)
                 .into_iter()
                 .map(|point| Circle::new(point, 3, color.mix(0.5).filled())),
         )?;
@@ -264,15 +310,18 @@ where
         .fold(0.0, f64::max)
         .max(3.15);
     let x_limit = max_abs_x * 1.04;
+    let (title_area, chart_area) = area.split_vertically(CHART_TITLE_HEIGHT);
+    draw_chart_title(
+        &title_area,
+        "Normal Quantile Chart for",
+        item,
+        QUANTILE_Y_LABEL_AREA_SIZE,
+    )?;
 
-    let mut chart = ChartBuilder::on(area)
-        .caption(
-            format!("Normal Quantile Chart for\n{}", wrap_title(item, 22)),
-            ("sans-serif", 30).into_font().style(FontStyle::Bold),
-        )
-        .margin(18)
-        .x_label_area_size(82)
-        .y_label_area_size(72)
+    let mut chart = ChartBuilder::on(&chart_area)
+        .margin(CHART_MARGIN)
+        .x_label_area_size(QUANTILE_X_LABEL_AREA_SIZE)
+        .y_label_area_size(QUANTILE_Y_LABEL_AREA_SIZE)
         .build_cartesian_2d(-x_limit..x_limit, y_min..y_max)?;
 
     let axis_style = if significant {
@@ -285,8 +334,12 @@ where
         .x_labels(0)
         .axis_style(axis_style)
         .disable_mesh()
-        .axis_desc_style(("sans-serif", 20).into_font().style(FontStyle::Bold))
-        .y_label_style(("sans-serif", 14));
+        .axis_desc_style(
+            ("sans-serif", AXIS_TITLE_FONT_SIZE)
+                .into_font()
+                .style(FontStyle::Bold),
+        )
+        .y_label_style(("sans-serif", AXIS_LABEL_FONT_SIZE));
     mesh.draw()?;
 
     for (position, label) in tick_positions.iter().zip(NORMAL_QUANTILE_LABELS) {
@@ -298,8 +351,8 @@ where
             EmptyElement::at((*position, y_min))
                 + Text::new(
                     label,
-                    (0, 24),
-                    ("sans-serif", 14)
+                    (0, 31),
+                    ("sans-serif", QUANTILE_LABEL_FONT_SIZE)
                         .into_font()
                         .transform(FontTransform::Rotate90)
                         .color(&BLACK)
@@ -348,7 +401,7 @@ where
 {
     let colors = palette();
     for (index, group) in groups.iter().enumerate() {
-        let y = 45 + index as i32 * 34;
+        let y = 48 + index as i32 * 42;
         let color = colors[index % colors.len()];
         area.draw(&PathElement::new(
             vec![(8, y), (42, y)],
@@ -358,7 +411,7 @@ where
         area.draw(&Text::new(
             group.clone(),
             (50, y),
-            ("sans-serif", 18)
+            ("sans-serif", LEGEND_FONT_SIZE)
                 .into_font()
                 .color(&BLACK)
                 .pos(Pos::new(HPos::Left, VPos::Center)),
@@ -388,6 +441,8 @@ where
     let rows = stats.len() + 1;
     let row_height = height as i32 / rows.max(1) as i32;
     let col_width = width as i32 / headers.len() as i32;
+    let header_font_size = TABLE_HEADER_FONT_SIZE.min((row_height - 10).max(16) as u32);
+    let body_font_size = TABLE_BODY_FONT_SIZE.min((row_height - 10).max(16) as u32);
 
     for row_index in 0..rows {
         let top = row_index as i32 * row_height;
@@ -430,9 +485,11 @@ where
                 table_value(stats[row_index - 1], col_index)
             };
             let font = if row_index == 0 {
-                ("sans-serif", 26).into_font().style(FontStyle::Bold)
+                ("sans-serif", header_font_size)
+                    .into_font()
+                    .style(FontStyle::Bold)
             } else {
-                ("sans-serif", 24).into_font()
+                ("sans-serif", body_font_size).into_font()
             };
             area.draw(&Text::new(
                 text,
@@ -456,41 +513,8 @@ fn sample_evenly(values: &[f64], sample_size: usize) -> Vec<f64> {
         .collect()
 }
 
-fn maximum_duplicate_count(values_by_group: &[Vec<f64>]) -> usize {
-    let mut totals: HashMap<u64, usize> = HashMap::new();
-    for value in values_by_group.iter().flatten() {
-        *totals.entry(value.to_bits()).or_default() += 1;
-    }
-    totals.values().copied().max().unwrap_or(1)
-}
-
-fn deterministic_jitter(
-    values: &[f64],
-    center: f64,
-    max_duplicate_count: usize,
-) -> Vec<(f64, f64)> {
-    let mut occurrences: HashMap<u64, usize> = HashMap::new();
-    let mut totals: HashMap<u64, usize> = HashMap::new();
-    for value in values {
-        *totals.entry(value.to_bits()).or_default() += 1;
-    }
-
-    values
-        .iter()
-        .map(|value| {
-            let key = value.to_bits();
-            let total = totals[&key];
-            let occurrence = occurrences.entry(key).or_default();
-            let offset = if total <= 1 {
-                0.0
-            } else {
-                let jitter_range = 0.22 * total as f64 / max_duplicate_count.max(1) as f64;
-                -jitter_range + 2.0 * jitter_range * (*occurrence as f64 / (total - 1) as f64)
-            };
-            *occurrence += 1;
-            (center + offset, *value)
-        })
-        .collect()
+fn centered_points(values: &[f64], center: f64) -> Vec<(f64, f64)> {
+    values.iter().map(|value| (center, *value)).collect()
 }
 
 fn normal_probability_points(values: &[f64], normal: &Normal) -> Vec<(f64, f64)> {
@@ -665,9 +689,9 @@ mod tests {
     }
 
     #[test]
-    fn sparse_duplicate_points_stay_centered() {
-        let points = deterministic_jitter(&[5.0, 5.0], 1.0, 10);
-        assert_eq!(points, vec![(0.956, 5.0), (1.044, 5.0)]);
+    fn box_chart_points_stay_on_group_center() {
+        let points = centered_points(&[5.0, 5.0, 7.0], 1.0);
+        assert_eq!(points, vec![(1.0, 5.0), (1.0, 5.0), (1.0, 7.0)]);
     }
 
     #[test]

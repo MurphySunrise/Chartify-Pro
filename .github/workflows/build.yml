@@ -1,40 +1,15 @@
-name: Build desktop applications
+name: Build Windows executable
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
-    tags:
-      - "v*"
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test
-
-  macos:
-    name: macOS arm64
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: chmod +x scripts/package-macos.sh
-      - run: ./scripts/package-macos.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Chartify-Pro-macOS-arm64
-          path: dist/Chartify-Pro-macOS-arm64.zip
-
   windows:
     name: Windows x64
     runs-on: windows-latest
@@ -42,33 +17,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - run: cargo test
       - run: cargo build --release
       - name: Package application
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/Chartify-Pro | Out-Null
-          Copy-Item target/release/chartify-pro.exe dist/Chartify-Pro/Chartify-Pro.exe
-          Compress-Archive -Path dist/Chartify-Pro/* -DestinationPath dist/Chartify-Pro-Windows-x64.zip
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/chartify-pro.exe "dist/Chartify Pro Rust V1.exe"
       - uses: actions/upload-artifact@v4
         with:
-          name: Chartify-Pro-Windows-x64
-          path: dist/Chartify-Pro-Windows-x64.zip
-
-  release:
-    name: Publish release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs:
-      - test
-      - macos
-      - windows
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: artifacts/**/*.zip
+          name: Chartify Pro Rust V1
+          path: dist/Chartify Pro Rust V1.exe

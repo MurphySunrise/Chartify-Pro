@@ -10,13 +10,18 @@ use rfd::FileDialog;
 
 use super::{Args, Structure, process};
 
+const DEFAULT_WINDOW_WIDTH: f32 = 760.0;
+const DEFAULT_WINDOW_HEIGHT: f32 = 900.0;
+const MIN_WINDOW_WIDTH: f32 = 760.0;
+const MIN_WINDOW_HEIGHT: f32 = 720.0;
+
 pub(super) fn launch() -> Result<()> {
     let app_icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/chartify.png"))
         .context("Unable to load the embedded Chartify icon")?;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([760.0, 790.0])
-            .with_min_inner_size([660.0, 640.0])
+            .with_inner_size([DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT])
+            .with_min_inner_size([MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT])
             .with_icon(app_icon),
         ..Default::default()
     };
