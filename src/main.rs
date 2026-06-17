@@ -17,6 +17,39 @@ enum Structure {
     Multiple,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MetricClass {
+    SignificantMismatch,
+    SuspectedMismatch,
+    Comparable,
+}
+
+impl MetricClass {
+    fn from_stats<'a>(
+        stats: impl IntoIterator<Item = &'a StatRow>,
+        sigma_delta_threshold: f64,
+    ) -> Self {
+        let mut has_suspected = false;
+        for row in stats {
+            let large_sigma = row
+                .sigma_delta
+                .is_some_and(|value| value.abs() >= sigma_delta_threshold);
+            let significant_p = row.p_value.is_some_and(|value| value < 0.05);
+            if large_sigma && significant_p {
+                return Self::SignificantMismatch;
+            }
+            if large_sigma || significant_p {
+                has_suspected = true;
+            }
+        }
+        if has_suspected {
+            Self::SuspectedMismatch
+        } else {
+            Self::Comparable
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Args {
     input: PathBuf,
@@ -28,6 +61,7 @@ struct Args {
     control_group: String,
     charts_dir: Option<PathBuf>,
     sample_size: usize,
+    sigma_delta_threshold: f64,
     ppt_template: Option<PathBuf>,
     ppt_output: Option<PathBuf>,
 }
@@ -83,6 +117,13 @@ fn run_cli() -> Result<()> {
             charts_dir.display()
         );
     }
+    println!(
+        "Calculated {} metrics; found {} significant mismatches, {} suspected mismatches, {} comparable metrics",
+        summary.metric_count,
+        summary.significant_mismatch_count,
+        summary.suspected_mismatch_count,
+        summary.comparable_count
+    );
     if let Some(ppt_output) = &summary.ppt_output {
         println!("Generated PowerPoint report at {}", ppt_output.display());
     }
@@ -97,20 +138,38 @@ fn run_cli() -> Result<()> {
 
 struct ProcessSummary {
     stat_count: usize,
+    metric_count: usize,
+    significant_mismatch_count: usize,
+    suspected_mismatch_count: usize,
+    comparable_count: usize,
     chart_count: usize,
     invalid_values: usize,
     ppt_output: Option<PathBuf>,
 }
 
 fn process(args: &Args) -> Result<ProcessSummary> {
+    process_with_progress(args, |_| {})
+}
+
+fn process_with_progress<F>(args: &Args, mut progress: F) -> Result<ProcessSummary>
+where
+    F: FnMut(String),
+{
+    progress("Reading CSV...".to_owned());
     let rows = read_csv(&args)?;
+    let metric_count = rows.items.len();
+    progress(format!(
+        "Calculating statistics for {metric_count} metrics..."
+    ));
     let stats = calculate_stats(
         &rows.long_rows,
         &rows.items,
         &rows.groups,
         &args.control_group,
     )?;
+    let class_counts = metric_class_counts(&rows.items, &stats, args.sigma_delta_threshold);
     if let Some(output) = &args.output {
+        progress("Writing statistics CSV...".to_owned());
         write_stats(output, &stats)?;
     }
     let temporary_charts = if args.ppt_template.is_some() && args.charts_dir.is_none() {
@@ -123,6 +182,7 @@ fn process(args: &Args) -> Result<ProcessSummary> {
         .as_deref()
         .or_else(|| temporary_charts.as_ref().map(|directory| directory.path()));
     let chart_images = if let Some(charts_dir) = charts_dir {
+        progress(format!("Rendering charts for {metric_count} metrics..."));
         chart::render_charts(
             charts_dir,
             &rows.items,
@@ -130,12 +190,14 @@ fn process(args: &Args) -> Result<ProcessSummary> {
             &rows.long_rows,
             &stats,
             args.sample_size,
+            args.sigma_delta_threshold,
         )?
     } else {
         Vec::new()
     };
     let ppt_output = match (&args.ppt_template, &args.ppt_output) {
         (Some(template), Some(output)) => {
+            progress("Building PowerPoint report...".to_owned());
             pptx::create_report(template, output, &chart_images)?;
             Some(output.clone())
         }
@@ -145,6 +207,10 @@ fn process(args: &Args) -> Result<ProcessSummary> {
     };
     Ok(ProcessSummary {
         stat_count: stats.len(),
+        metric_count,
+        significant_mismatch_count: class_counts.significant_mismatch_count,
+        suspected_mismatch_count: class_counts.suspected_mismatch_count,
+        comparable_count: class_counts.comparable_count,
         chart_count: chart_images.len(),
         invalid_values: rows.invalid_values,
         ppt_output,
@@ -175,6 +241,8 @@ Options:
   --control-group VALUE
   --charts-dir PATH        Optional directory for PNG charts
   --sample-size NUMBER     Maximum plotted values per group (default: 10000)
+  --sigma-delta-threshold NUMBER
+                        Sigma delta cutoff for mismatch classification (default: 1.0)
   --ppt-template PATH      Optional PowerPoint template
   --ppt-output PATH        Output PPTX path
   -h, --help
@@ -225,6 +293,15 @@ where
         })
         .transpose()?
         .unwrap_or(10_000);
+    let sigma_delta_threshold = values
+        .get("--sigma-delta-threshold")
+        .map(|value| {
+            value
+                .parse::<f64>()
+                .with_context(|| format!("Invalid --sigma-delta-threshold value '{value}'"))
+        })
+        .transpose()?
+        .unwrap_or(1.0);
     let data_cols = required(&values, "--data-cols")?
         .split(',')
         .map(str::trim)
@@ -237,6 +314,9 @@ where
     }
     if sample_size == 0 {
         bail!("--sample-size must be greater than zero");
+    }
+    if !sigma_delta_threshold.is_finite() || sigma_delta_threshold <= 0.0 {
+        bail!("--sigma-delta-threshold must be greater than zero");
     }
     if structure == Structure::Single {
         if item_col.is_none() {
@@ -257,6 +337,7 @@ where
         control_group,
         charts_dir,
         sample_size,
+        sigma_delta_threshold,
         ppt_template,
         ppt_output,
     })
@@ -367,6 +448,39 @@ fn read_csv(args: &Args) -> Result<InputRows> {
         groups,
         invalid_values,
     })
+}
+
+#[derive(Default)]
+struct MetricClassCounts {
+    significant_mismatch_count: usize,
+    suspected_mismatch_count: usize,
+    comparable_count: usize,
+}
+
+impl MetricClassCounts {
+    fn add(&mut self, class: MetricClass) {
+        match class {
+            MetricClass::SignificantMismatch => self.significant_mismatch_count += 1,
+            MetricClass::SuspectedMismatch => self.suspected_mismatch_count += 1,
+            MetricClass::Comparable => self.comparable_count += 1,
+        }
+    }
+}
+
+fn metric_class_counts(
+    items: &[String],
+    stats: &[StatRow],
+    sigma_delta_threshold: f64,
+) -> MetricClassCounts {
+    let mut counts = MetricClassCounts::default();
+    for item in items {
+        let class = MetricClass::from_stats(
+            stats.iter().filter(|row| row.item == *item),
+            sigma_delta_threshold,
+        );
+        counts.add(class);
+    }
+    counts
 }
 
 fn column_index(headers: &csv::StringRecord, name: &str) -> Result<usize> {
@@ -593,6 +707,64 @@ mod tests {
     }
 
     #[test]
+    fn classifies_metrics_by_sigma_delta_and_p_value() {
+        let stats = vec![
+            test_stat_row("red", "case", Some(1.2), Some(0.01)),
+            test_stat_row("orange_sigma", "case", Some(1.2), Some(0.5)),
+            test_stat_row("orange_p", "case", Some(0.4), Some(0.01)),
+            test_stat_row("normal", "case", Some(0.4), Some(0.5)),
+        ];
+
+        assert_eq!(
+            MetricClass::from_stats(stats.iter().filter(|row| row.item == "red"), 1.0),
+            MetricClass::SignificantMismatch
+        );
+        assert_eq!(
+            MetricClass::from_stats(stats.iter().filter(|row| row.item == "orange_sigma"), 1.0),
+            MetricClass::SuspectedMismatch
+        );
+        assert_eq!(
+            MetricClass::from_stats(stats.iter().filter(|row| row.item == "orange_p"), 1.0),
+            MetricClass::SuspectedMismatch
+        );
+        assert_eq!(
+            MetricClass::from_stats(stats.iter().filter(|row| row.item == "normal"), 1.0),
+            MetricClass::Comparable
+        );
+    }
+
+    #[test]
+    fn sigma_delta_threshold_changes_classification() {
+        let stats = vec![test_stat_row("metric", "case", Some(1.2), Some(0.01))];
+
+        assert_eq!(
+            MetricClass::from_stats(stats.iter(), 1.0),
+            MetricClass::SignificantMismatch
+        );
+        assert_eq!(
+            MetricClass::from_stats(stats.iter(), 1.5),
+            MetricClass::SuspectedMismatch
+        );
+    }
+
+    #[test]
+    fn class_counts_unique_metrics() {
+        let items = vec!["red".into(), "orange".into(), "normal".into()];
+        let stats = vec![
+            test_stat_row("red", "control", None, None),
+            test_stat_row("red", "case_1", Some(1.4), Some(0.01)),
+            test_stat_row("red", "case_2", Some(0.2), Some(0.7)),
+            test_stat_row("orange", "case", Some(1.2), None),
+            test_stat_row("normal", "case", Some(0.4), Some(0.5)),
+        ];
+
+        let counts = metric_class_counts(&items, &stats, 1.0);
+        assert_eq!(counts.significant_mismatch_count, 1);
+        assert_eq!(counts.suspected_mismatch_count, 1);
+        assert_eq!(counts.comparable_count, 1);
+    }
+
+    #[test]
     fn welch_test_matches_expected_value() {
         let p_value = welch_p_value(&[3.0, 4.0], &[1.0, 2.0]).unwrap().unwrap();
         assert!((p_value - 0.105572809).abs() < 1e-9);
@@ -613,5 +785,25 @@ mod tests {
         assert_eq!(median(&values), Some(2.5));
         assert_eq!(quantile_nearest(&values, 0.05), Some(1.0));
         assert_eq!(quantile_nearest(&values, 0.95), Some(4.0));
+    }
+
+    fn test_stat_row(
+        item: &str,
+        group: &str,
+        sigma_delta: Option<f64>,
+        p_value: Option<f64>,
+    ) -> StatRow {
+        StatRow {
+            item: item.into(),
+            group: group.into(),
+            count: 3,
+            mean: Some(1.0),
+            median: Some(1.0),
+            q5: Some(1.0),
+            q95: Some(1.0),
+            std: Some(0.0),
+            sigma_delta,
+            p_value,
+        }
     }
 }

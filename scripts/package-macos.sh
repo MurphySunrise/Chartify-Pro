@@ -2,7 +2,8 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-APP_NAME="Chartify Pro"
+APP_NAME="${APP_NAME:-Chartify Pro}"
+ZIP_NAME="${ZIP_NAME:-Chartify-Pro-macOS-arm64.zip}"
 APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -54,9 +55,9 @@ PLIST
 chmod +x "$MACOS_DIR/chartify-pro"
 codesign --force --deep --sign - "$APP_DIR"
 
-rm -f "$ROOT_DIR/dist/Chartify-Pro-macOS-arm64.zip"
+rm -f "$ROOT_DIR/dist/$ZIP_NAME"
 ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" \
-    "$ROOT_DIR/dist/Chartify-Pro-macOS-arm64.zip"
+    "$ROOT_DIR/dist/$ZIP_NAME"
 
 echo "Created $APP_DIR"
-echo "Created $ROOT_DIR/dist/Chartify-Pro-macOS-arm64.zip"
+echo "Created $ROOT_DIR/dist/$ZIP_NAME"

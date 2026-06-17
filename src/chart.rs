@@ -9,7 +9,7 @@ use plotters::style::text_anchor::{HPos, Pos, VPos};
 use rayon::prelude::*;
 use statrs::distribution::{ContinuousCDF, Normal};
 
-use super::{LongRow, StatRow, median};
+use super::{LongRow, MetricClass, StatRow, median};
 
 const WIDTH: u32 = 1600;
 const HEIGHT: u32 = 1000;
@@ -38,7 +38,7 @@ const NORMAL_QUANTILE_LABELS: [&str; 18] = [
 pub(super) struct ChartImage {
     pub item: String,
     pub path: PathBuf,
-    pub significant: bool,
+    pub class: MetricClass,
 }
 
 pub(super) fn render_charts(
@@ -48,6 +48,7 @@ pub(super) fn render_charts(
     long_rows: &[LongRow],
     stats: &[StatRow],
     sample_size: usize,
+    sigma_delta_threshold: f64,
 ) -> Result<Vec<ChartImage>> {
     fs::create_dir_all(output_dir)
         .with_context(|| format!("Unable to create {}", output_dir.display()))?;
@@ -79,13 +80,20 @@ pub(super) fn render_charts(
                 })
                 .collect::<Vec<_>>();
             let path = output_dir.join(format!("{index:04}_{}.png", safe_filename(item)));
-            render_item_chart(&path, item, groups, &sampled_values, &item_stats)?;
+            let class = MetricClass::from_stats(item_stats.iter().copied(), sigma_delta_threshold);
+            render_item_chart(
+                &path,
+                item,
+                groups,
+                &sampled_values,
+                &item_stats,
+                class,
+                sigma_delta_threshold,
+            )?;
             Ok(ChartImage {
                 item: item.clone(),
                 path,
-                significant: item_stats
-                    .iter()
-                    .any(|row| row.p_value.is_some_and(|value| value < 0.05)),
+                class,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -105,12 +113,11 @@ fn render_item_chart(
     groups: &[String],
     values_by_group: &[Vec<f64>],
     stats: &[&StatRow],
+    class: MetricClass,
+    sigma_delta_threshold: f64,
 ) -> Result<()> {
     let root = BitMapBackend::new(path, (WIDTH, HEIGHT)).into_drawing_area();
     root.fill(&WHITE)?;
-    let significant = stats
-        .iter()
-        .any(|row| row.p_value.is_some_and(|value| value < 0.05));
 
     let content = root.margin(20, 35, 24, 24);
     let (top, lower) = content.split_vertically(675);
@@ -119,10 +126,10 @@ fn render_item_chart(
     let (box_area, right) = top.split_horizontally(720);
     let (quantile_area, legend_area) = right.split_horizontally(720);
 
-    draw_box_chart(&box_area, item, groups, values_by_group, significant)?;
-    draw_normal_chart(&quantile_area, item, values_by_group, significant)?;
+    draw_box_chart(&box_area, item, groups, values_by_group, class)?;
+    draw_normal_chart(&quantile_area, item, values_by_group, class)?;
     draw_legend(&legend_area, groups)?;
-    draw_summary_table(&table_area, stats)?;
+    draw_summary_table(&table_area, stats, sigma_delta_threshold)?;
 
     root.present()
         .with_context(|| format!("Unable to write {}", path.display()))?;
@@ -162,12 +169,20 @@ where
     Ok(())
 }
 
+fn class_axis_style(class: MetricClass) -> ShapeStyle {
+    match class {
+        MetricClass::SignificantMismatch => RED.stroke_width(2),
+        MetricClass::SuspectedMismatch => RGBColor(245, 140, 0).stroke_width(2),
+        MetricClass::Comparable => BLACK.stroke_width(2),
+    }
+}
+
 fn draw_box_chart<DB: DrawingBackend>(
     area: &DrawingArea<DB, Shift>,
     item: &str,
     groups: &[String],
     values_by_group: &[Vec<f64>],
-    significant: bool,
+    class: MetricClass,
 ) -> Result<()>
 where
     DB::ErrorType: 'static,
@@ -188,11 +203,7 @@ where
         .y_label_area_size(BOX_Y_LABEL_AREA_SIZE)
         .build_cartesian_2d(0.5f64..x_max, y_min..y_max)?;
 
-    let axis_style = if significant {
-        RED.stroke_width(2)
-    } else {
-        BLACK.stroke_width(2)
-    };
+    let axis_style = class_axis_style(class);
     let x_label_formatter = move |value: &f64| group_label(value, &label_groups);
     let mut mesh = chart.configure_mesh();
     mesh.x_desc("Group")
@@ -284,7 +295,7 @@ fn draw_normal_chart<DB: DrawingBackend>(
     area: &DrawingArea<DB, Shift>,
     item: &str,
     values_by_group: &[Vec<f64>],
-    significant: bool,
+    class: MetricClass,
 ) -> Result<()>
 where
     DB::ErrorType: 'static,
@@ -324,11 +335,7 @@ where
         .y_label_area_size(QUANTILE_Y_LABEL_AREA_SIZE)
         .build_cartesian_2d(-x_limit..x_limit, y_min..y_max)?;
 
-    let axis_style = if significant {
-        RED.stroke_width(2)
-    } else {
-        BLACK.stroke_width(2)
-    };
+    let axis_style = class_axis_style(class);
     let mut mesh = chart.configure_mesh();
     mesh.x_desc("Normal Quantile")
         .x_labels(0)
@@ -423,6 +430,7 @@ where
 fn draw_summary_table<DB: DrawingBackend>(
     area: &DrawingArea<DB, Shift>,
     stats: &[&StatRow],
+    sigma_delta_threshold: f64,
 ) -> Result<()>
 where
     DB::ErrorType: 'static,
@@ -451,16 +459,17 @@ where
         } else {
             (row_index as i32 + 1) * row_height
         };
-        let row_is_significant = row_index > 0
-            && stats[row_index - 1]
-                .p_value
-                .is_some_and(|value| value < 0.05);
         let fill = if row_index == 0 {
             RGBColor(220, 220, 220)
-        } else if row_is_significant {
-            RGBColor(255, 180, 70)
         } else {
-            WHITE
+            match MetricClass::from_stats(
+                std::iter::once(stats[row_index - 1]),
+                sigma_delta_threshold,
+            ) {
+                MetricClass::SignificantMismatch => RGBColor(255, 215, 215),
+                MetricClass::SuspectedMismatch => RGBColor(255, 205, 120),
+                MetricClass::Comparable => WHITE,
+            }
         };
 
         for col_index in 0..headers.len() {

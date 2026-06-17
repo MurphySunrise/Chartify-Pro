@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use eframe::egui;
 use rfd::FileDialog;
 
-use super::{Args, Structure, process};
+use super::{Args, Structure, process_with_progress};
 
 const DEFAULT_WINDOW_WIDTH: f32 = 760.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 900.0;
@@ -44,6 +44,7 @@ struct ChartifyApp {
     groups: Vec<String>,
     control_group: String,
     sample_size: String,
+    sigma_delta_threshold: String,
     status: String,
     running: bool,
     generated_ppt: Option<PathBuf>,
@@ -51,6 +52,7 @@ struct ChartifyApp {
 }
 
 enum WorkerResult {
+    Progress(String),
     Complete {
         message: String,
         ppt_output: Option<PathBuf>,
@@ -107,6 +109,7 @@ impl ChartifyApp {
             groups: Vec::new(),
             control_group: String::new(),
             sample_size: "10000".to_owned(),
+            sigma_delta_threshold: "1.0".to_owned(),
             status: "Select a CSV file".to_owned(),
             running: false,
             generated_ppt: None,
@@ -161,9 +164,12 @@ impl ChartifyApp {
                 self.receiver = Some(receiver);
                 self.running = true;
                 self.generated_ppt = None;
-                self.status = "Processing...".to_owned();
+                self.status = "Preparing report...".to_owned();
                 thread::spawn(move || {
-                    let message = match process(&args) {
+                    let progress_sender = sender.clone();
+                    let message = match process_with_progress(&args, |status| {
+                        let _ = progress_sender.send(WorkerResult::Progress(status));
+                    }) {
                         Ok(summary) => {
                             let output_name = summary
                                 .ppt_output
@@ -172,8 +178,13 @@ impl ChartifyApp {
                                 .unwrap_or_else(|| "unknown file".to_owned());
                             WorkerResult::Complete {
                                 message: format!(
-                                    "Complete: {} charts, {} ignored values. Saved as {}",
-                                    summary.chart_count, summary.invalid_values, output_name
+                                    "Complete: {} metrics, {} significant, {} suspected, {} comparable, {} ignored values. Saved as {}",
+                                    summary.metric_count,
+                                    summary.significant_mismatch_count,
+                                    summary.suspected_mismatch_count,
+                                    summary.comparable_count,
+                                    summary.invalid_values,
+                                    output_name
                                 ),
                                 ppt_output: summary.ppt_output,
                             }
@@ -230,6 +241,13 @@ impl ChartifyApp {
         if sample_size == 0 {
             bail!("Sample size must be greater than zero");
         }
+        let sigma_delta_threshold = self
+            .sigma_delta_threshold
+            .parse::<f64>()
+            .context("Sigma delta threshold must be a number")?;
+        if !sigma_delta_threshold.is_finite() || sigma_delta_threshold <= 0.0 {
+            bail!("Sigma delta threshold must be greater than zero");
+        }
         let parent = input.parent().unwrap_or_else(|| Path::new("."));
         let stem = input
             .file_stem()
@@ -247,29 +265,38 @@ impl ChartifyApp {
             control_group: self.control_group.clone(),
             charts_dir: None,
             sample_size,
+            sigma_delta_threshold,
             ppt_template: Some(ppt_template),
             ppt_output: Some(ppt_output),
         })
     }
 
     fn poll_worker(&mut self) {
-        let message = self
+        let mut finished = false;
+        while let Some(message) = self
             .receiver
             .as_ref()
-            .and_then(|receiver| receiver.try_recv().ok());
-        if let Some(message) = message {
-            self.running = false;
-            self.receiver = None;
+            .and_then(|receiver| receiver.try_recv().ok())
+        {
             self.status = match message {
+                WorkerResult::Progress(text) => text,
                 WorkerResult::Complete {
                     message,
                     ppt_output,
                 } => {
                     self.generated_ppt = ppt_output;
+                    finished = true;
                     message
                 }
-                WorkerResult::Failed(text) => format!("Error: {text}"),
+                WorkerResult::Failed(text) => {
+                    finished = true;
+                    format!("Error: {text}")
+                }
             };
+        }
+        if finished {
+            self.running = false;
+            self.receiver = None;
         }
     }
 
@@ -417,6 +444,13 @@ impl eframe::App for ChartifyApp {
                                     egui::TextEdit::singleline(&mut self.sample_size)
                                         .desired_width(f32::INFINITY),
                                 );
+
+                                field_label(ui, "Sigma delta threshold");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.sigma_delta_threshold)
+                                        .desired_width(f32::INFINITY),
+                                )
+                                .on_hover_text("Used with p-value < 0.05 to classify mismatches");
                             });
 
                             columns[1].vertical(|ui| {

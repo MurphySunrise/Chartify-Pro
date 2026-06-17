@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-use crate::chart::ChartImage;
+use crate::{MetricClass, chart::ChartImage};
 
 const SLIDE_WIDTH: i64 = 12_192_000;
 const SLIDE_HEIGHT: i64 = 6_858_000;
@@ -130,17 +130,27 @@ pub(super) fn create_report(
 fn report_slides(chart_images: &[ChartImage]) -> Vec<ReportSlide<'_>> {
     let significant = chart_images
         .iter()
-        .filter(|image| image.significant)
+        .filter(|image| image.class == MetricClass::SignificantMismatch)
+        .collect::<Vec<_>>();
+    let suspected = chart_images
+        .iter()
+        .filter(|image| image.class == MetricClass::SuspectedMismatch)
         .collect::<Vec<_>>();
     let comparable = chart_images
         .iter()
-        .filter(|image| !image.significant)
+        .filter(|image| image.class == MetricClass::Comparable)
         .collect::<Vec<_>>();
     let mut slides = Vec::new();
 
     for images in significant.chunks(8) {
         slides.push(ReportSlide {
             title: "Metrics Mismatch",
+            images: images.to_vec(),
+        });
+    }
+    for images in suspected.chunks(8) {
+        slides.push(ReportSlide {
+            title: "Suspected Mismatch",
             images: images.to_vec(),
         });
     }
@@ -322,14 +332,20 @@ mod tests {
             .map(|index| ChartImage {
                 item: format!("M{index}"),
                 path: format!("M{index}.png").into(),
-                significant: index < 2,
+                class: match index {
+                    0..=1 => MetricClass::SignificantMismatch,
+                    2..=4 => MetricClass::SuspectedMismatch,
+                    _ => MetricClass::Comparable,
+                },
             })
             .collect::<Vec<_>>();
         let slides = report_slides(&images);
-        assert_eq!(slides.len(), 2);
+        assert_eq!(slides.len(), 3);
         assert_eq!(slides[0].title, "Metrics Mismatch");
         assert_eq!(slides[0].images.len(), 2);
-        assert_eq!(slides[1].title, "Metrics Comparable");
-        assert_eq!(slides[1].images.len(), 8);
+        assert_eq!(slides[1].title, "Suspected Mismatch");
+        assert_eq!(slides[1].images.len(), 3);
+        assert_eq!(slides[2].title, "Metrics Comparable");
+        assert_eq!(slides[2].images.len(), 5);
     }
 }
