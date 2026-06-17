@@ -14,18 +14,18 @@ use super::{LongRow, MetricClass, StatRow, median};
 const WIDTH: u32 = 1600;
 const HEIGHT: u32 = 1000;
 const CHART_TITLE_FONT_SIZE: u32 = 38;
-const AXIS_TITLE_FONT_SIZE: u32 = 26;
-const AXIS_LABEL_FONT_SIZE: u32 = 22;
-const QUANTILE_LABEL_FONT_SIZE: u32 = 19;
-const LEGEND_FONT_SIZE: u32 = 22;
+const AXIS_TITLE_FONT_SIZE: u32 = 32;
+const AXIS_LABEL_FONT_SIZE: u32 = 28;
+const QUANTILE_LABEL_FONT_SIZE: u32 = 22;
+const LEGEND_FONT_SIZE: u32 = 26;
 const TABLE_HEADER_FONT_SIZE: u32 = 34;
 const TABLE_BODY_FONT_SIZE: u32 = 30;
 const CHART_MARGIN: u32 = 18;
 const CHART_TITLE_HEIGHT: u32 = 86;
-const BOX_X_LABEL_AREA_SIZE: u32 = 88;
-const BOX_Y_LABEL_AREA_SIZE: u32 = 88;
-const QUANTILE_X_LABEL_AREA_SIZE: u32 = 105;
-const QUANTILE_Y_LABEL_AREA_SIZE: u32 = 88;
+const BOX_X_LABEL_AREA_SIZE: u32 = 112;
+const BOX_Y_LABEL_AREA_SIZE: u32 = 110;
+const QUANTILE_X_LABEL_AREA_SIZE: u32 = 140;
+const QUANTILE_Y_LABEL_AREA_SIZE: u32 = 110;
 const NORMAL_QUANTILES: [f64; 18] = [
     0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 0.995,
     0.999,
@@ -121,14 +121,15 @@ fn render_item_chart(
 
     let content = root.margin(20, 35, 24, 24);
     let (top, lower) = content.split_vertically(675);
-    let (_, lower) = lower.split_vertically(65);
+    let (_, lower) = lower.split_vertically(40);
     let (table_area, _) = lower.split_vertically(175);
     let (box_area, right) = top.split_horizontally(720);
     let (quantile_area, legend_area) = right.split_horizontally(720);
 
     draw_box_chart(&box_area, item, groups, values_by_group, class)?;
     draw_normal_chart(&quantile_area, item, values_by_group, class)?;
-    draw_legend(&legend_area, groups)?;
+    let (_, legend_chart_area) = legend_area.split_vertically(CHART_TITLE_HEIGHT);
+    draw_legend(&legend_chart_area, groups)?;
     draw_summary_table(&table_area, stats, sigma_delta_threshold)?;
 
     root.present()
@@ -358,7 +359,7 @@ where
             EmptyElement::at((*position, y_min))
                 + Text::new(
                     label,
-                    (0, 31),
+                    (0, 42),
                     ("sans-serif", QUANTILE_LABEL_FONT_SIZE)
                         .into_font()
                         .transform(FontTransform::Rotate90)
@@ -408,7 +409,7 @@ where
 {
     let colors = palette();
     for (index, group) in groups.iter().enumerate() {
-        let y = 48 + index as i32 * 42;
+        let y = 38 + index as i32 * 48;
         let color = colors[index % colors.len()];
         area.draw(&PathElement::new(
             vec![(8, y), (42, y)],

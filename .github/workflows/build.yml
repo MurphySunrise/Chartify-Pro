@@ -23,8 +23,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/chartify-pro.exe "dist/Chartify Pro Rust V1.exe"
+          Copy-Item target/release/chartify-pro.exe "dist/Chartify Pro Rust V3.exe"
       - uses: actions/upload-artifact@v4
         with:
-          name: Chartify Pro Rust V1
-          path: dist/Chartify Pro Rust V1.exe
+          name: Chartify Pro Rust V3
+          path: dist/Chartify Pro Rust V3.exe
